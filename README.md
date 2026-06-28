@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/sKuhLight/monix/actions/workflows/ci.yml/badge.svg)](https://github.com/sKuhLight/monix/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-72a4f2?logo=ko-fi&logoColor=white)](https://ko-fi.com/R5R6223HMO)
 
 A standalone, native Linux control application **and** driver for Audient iD-series
 USB audio interfaces. Inspired by the great work of
@@ -195,6 +196,13 @@ want as default in your sound settings.
   (re-login after `usermod`), or the udev rule isn't installed.
 - **S/PDIF crackling** — set Clock source to **Optical** in the System Panel so the
   iD slaves to the incoming stream, and use the same sample rate at both ends.
+
+## Support
+
+Monix is free and open source. If it's useful to you, you can support development
+on Ko-fi:
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R6223HMO)
 
 ## Credits
 
