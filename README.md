@@ -112,8 +112,13 @@ spread or mis-map stereo across channels your monitors don't carry — audio
 "bugs out". (Windows avoids this only because Audient's driver splits the device
 into named stereo endpoints.)
 
-`setup/` recreates that split in the PipeWire graph — normal stereo sinks/sources
-each wired to one channel pair, while the full multichannel node stays for DAWs:
+**Easiest: do it in the app.** Open **VIRTUAL DEVICES** in Monix — tick the stereo
+sinks/sources you want (they appear instantly, no PipeWire restart), hit *Enable
+inputs* for the mics/ADAT, and *Save as startup config* to make them persist.
+
+`setup/` has the same thing as hand-editable PipeWire configs — stereo
+sinks/sources each wired to one channel pair, while the full multichannel node
+stays for DAWs:
 
 - `setup/id24-stereo-sink.conf` — minimal: one clean "iD24 Stereo" sink on DAW 1+2.
   Point games/desktop at it. Fixes the gaming issue with the least fuss.

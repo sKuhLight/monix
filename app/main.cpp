@@ -9,6 +9,7 @@
 #include "monix.h"
 #include "theme.h"
 #include "persist.h"
+#include "pwsplit.h"
 
 #include <chrono>
 #include <vector>
@@ -93,7 +94,7 @@ int main() {
     int   curMix = 0;            // 0=Main,1=Cue A,2=Cue B (which mix the faders edit)
     const char* mixName[3] = {"MASTER MIX", "CUE A", "CUE B"};
     int   source = 2;           // MIC/OPT/DAW selector (display)
-    bool  showRouting = false;
+    bool  showRouting = false, showDevices = false;
     struct OutPair { const char* name; int l, r; };
     // iD24 routable outputs (matches the official System Panel). Analogue 0-5 and
     // optical/digital 8-11 (RE: routing entity 0x33 addresses outputs 0–5, 8–11).
@@ -298,6 +299,7 @@ int main() {
         if (ImGui::Combo("##tbsrc", &tbSrc, tbN, 3) && connected) dev.setTalkbackSource(tbE[tbSrc]);
         ImGui::Dummy(ImVec2(0,10));
         if (ImGui::Button("SYSTEM / ROUTING", ImVec2(-1, 30))) showRouting = !showRouting;
+        if (ImGui::Button("VIRTUAL DEVICES", ImVec2(-1, 26))) showDevices = !showDevices;
         ImGui::EndChild();
 
         // ===== System panel: routing matrix (output pair x destination) =====
@@ -395,6 +397,49 @@ int main() {
             if (ImGui::SliderFloat("Dim trim", &dimTrim, 0, 1, "%.2f") && connected) dev.setDimTrim(dimTrim);
             ImGui::SetNextItemWidth(160);
             if (ImGui::SliderFloat("Alt trim", &altTrim, 0, 1, "%.2f") && connected) dev.setAltTrim(altTrim);
+            ImGui::End();
+        }
+
+        // ===== Virtual Devices: live Windows-style stereo split via pw-loopback =====
+        if (showDevices) {
+            ImGui::SetNextWindowSize(ImVec2(430, 380), ImGuiCond_FirstUseEver);
+            ImGui::Begin("Virtual Devices", &showDevices);
+            if (!pwsplit::pwAvailable()) {
+                ImGui::TextWrapped("pw-loopback not found. Install your distro's PipeWire "
+                                   "tools (e.g. 'pipewire' / 'pipewire-audio') to use this.");
+            } else {
+                auto& dv = pwsplit::devices();
+                static std::vector<char> run(dv.size(), 0);
+                static double poll = 0; double tt = now_ms();
+                if (tt - poll > 1500) { poll = tt; for (size_t i=0;i<dv.size();i++) run[i] = pwsplit::running(dv[i].node); }
+                ImGui::TextWrapped("Split the iD's single 16-channel device into clean stereo "
+                                   "sinks/sources, like the Windows driver. Fixes games that "
+                                   "scatter audio across channels your monitors don't carry.");
+                ImGui::Dummy(ImVec2(0,4));
+                if (ImGui::Button("Enable inputs (Duplex profile)")) pwsplit::setDuplex();
+                ImGui::SameLine(); ImGui::TextDisabled("(for Mic/ADAT)");
+                ImGui::Separator();
+                ImGui::TextDisabled("OUTPUTS");
+                for (size_t i=0;i<dv.size();i++) {
+                    if (!dv[i].sink && (i==0 || dv[i-1].sink)) { ImGui::Separator(); ImGui::TextDisabled("INPUTS"); }
+                    bool on = run[i];
+                    ImGui::PushID((int)i);
+                    if (ImGui::Checkbox(dv[i].label, &on)) {
+                        if (on) { if (!pwsplit::enable(dv[i])) on=false; } else pwsplit::disable(dv[i]);
+                        run[i] = on; poll = 0;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::Separator();
+                static std::string savedPath; static double savedAt = 0;
+                if (ImGui::Button("Save as startup config")) {
+                    bool en[16]={false}; for (size_t i=0;i<dv.size() && i<16;i++) en[i]=run[i];
+                    if (pwsplit::saveConfig(en, savedPath)) savedAt = now_ms();
+                }
+                ImGui::SameLine(); ImGui::TextDisabled("(persists across reboots)");
+                if (savedAt && now_ms()-savedAt < 8000)
+                    ImGui::TextWrapped("Saved to %s", savedPath.c_str());
+            }
             ImGui::End();
         }
 
