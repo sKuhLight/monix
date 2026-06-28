@@ -104,6 +104,32 @@ been hardware-tested.
   (routing matrix incl. digital outs, sample rate, clock source with S-PDIF lock
   warning, digital I/O mode, trims).
 
+## Multiple devices & gaming (Windows-style split)
+
+The iD24 is class-compliant, so Linux sees it as **one** 16-ch output + 12-ch
+input node with an all-`aux` channel map. Games and surround-aware apps then
+spread or mis-map stereo across channels your monitors don't carry — audio
+"bugs out". (Windows avoids this only because Audient's driver splits the device
+into named stereo endpoints.)
+
+`setup/` recreates that split in the PipeWire graph — normal stereo sinks/sources
+each wired to one channel pair, while the full multichannel node stays for DAWs:
+
+- `setup/id24-stereo-sink.conf` — minimal: one clean "iD24 Stereo" sink on DAW 1+2.
+  Point games/desktop at it. Fixes the gaming issue with the least fuss.
+- `setup/id24-split.conf` — full Windows-style set: Main 1+2 / Out 3+4 / Phones 5+6
+  sinks, and Mic 1+2 / ADAT / Loopback sources.
+
+```sh
+mkdir -p ~/.config/pipewire/pipewire.conf.d
+cp setup/id24-split.conf ~/.config/pipewire/pipewire.conf.d/   # or id24-stereo-sink.conf
+systemctl --user restart pipewire pipewire-pulse
+```
+
+For inputs, set the card to its **Duplex** profile once (pavucontrol →
+"Mehrkanal-Duplex"); WirePlumber remembers it. Then pick the stereo device you
+want as default in your sound settings.
+
 ## Troubleshooting
 
 - **No `/dev/audient_id*`** — module didn't load. Check `lsmod | grep audient` and
