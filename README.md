@@ -53,7 +53,8 @@ sudo pacman -S --needed base-devel cmake git linux-headers alsa-lib glfw mesa dk
 
 # Debian / Ubuntu / Pop!_OS
 sudo apt install build-essential cmake git linux-headers-$(uname -r) \
-                 libasound2-dev libglfw3-dev libgl1-mesa-dev dkms
+                 libasound2-dev libglfw3-dev libgl1-mesa-dev dkms \
+                 libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
 
 # Fedora
 sudo dnf install gcc-c++ cmake git kernel-devel alsa-lib-devel glfw-devel \
