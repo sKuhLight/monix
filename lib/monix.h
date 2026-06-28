@@ -98,6 +98,11 @@ public:
     bool setMixerCell(int cell /*0..95*/, float gain);
     bool setMixerCellRaw(int cell, int16_t v);
 
+    // Mix-bus master output level. FU 0x0c sits on the mixer's 6-channel output:
+    // Main = ch 1/2, Cue A = ch 3/4, Cue B = ch 5/6 (Cue A/B = the phones level).
+    bool setBusVolume(Bus bus, float v);
+    bool getBusVolume(Bus bus, float& out);
+
     // ---- Routing (entity 0x33 sel 0x06): output <- source code ----
     // What an output pair plays (source codes captured from the official app).
     enum class OutDest { Main, Alt, CueA, CueB, DAW, Direct };
