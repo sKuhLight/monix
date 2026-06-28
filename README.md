@@ -1,10 +1,26 @@
 # Monix
 
+[![CI](https://github.com/sKuhLight/monix/actions/workflows/ci.yml/badge.svg)](https://github.com/sKuhLight/monix/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A standalone, native Linux control application **and** driver for Audient iD-series
 USB audio interfaces. Successor to the MixiD experiments — built from scratch around
 a properly reverse-engineered protocol so it can do what the official app does:
 live state sync, channel faders, routing, and VU metering, **while audio keeps
 playing**.
+
+## Compatibility
+
+- **Any modern Linux distro** — Arch/CachyOS, Debian 12+, Ubuntu 22.04+, Fedora,
+  etc. The module Makefile auto-detects Clang- vs GCC-built kernels, so CachyOS's
+  Clang kernel and the GCC kernels on Debian/Fedora both build cleanly.
+- **Kernel ≥ 5.9** — the module uses the in-kernel `usb_control_msg_send/recv`
+  helpers (added in 5.9), so control + audio can coexist without claiming the
+  audio interface.
+- **PipeWire** is recommended (for the Windows-style virtual-device split); the
+  rest works on any ALSA setup.
+- Hardware-verified on the **iD24**; other iD models are detected and supported on
+  a best-effort basis (see [Device support](#device-support)).
 
 ## Why this exists
 
