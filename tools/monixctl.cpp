@@ -16,6 +16,12 @@ int main(int argc, char** argv) {
     if (!d.open()) { fprintf(stderr, "open failed: %s\n", d.lastError()); return 1; }
 
     if (argc < 2 || !strcmp(argv[1], "status")) {
+        if (auto* i = d.info()) {
+            const char* sch = i->scheme==RoutingScheme::Formula?"formula":i->scheme==RoutingScheme::Table?"table":"none";
+            printf("Device      : %s (pid 0x%x)%s\n", i->name, i->productId, i->verified?"":"  [experimental/untested]");
+            printf("Layout      : %d mic, %d digital, %d DAW -> %d mixer nodes; %d outputs; routing=%s\n",
+                   i->micInputs, i->digitalInputs, i->dawReturns, i->mixerNodes(), i->outputs, sch);
+        }
         printf("Sample rate : %d Hz\n", d.getSampleRate());
         float mv; if (d.getMonitorVolume(mv)) printf("Monitor vol : %.2f\n", mv);
         printf("Masters     :");

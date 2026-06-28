@@ -15,8 +15,12 @@ modules.order
 Module.symvers
 .tmp_versions/
 
-# reverse-engineering working files (do not redistribute the macOS binary)
-/re/
+# reverse-engineering: keep only the documented helper scripts; never commit the
+# proprietary binary, ad-hoc probe tools, or their compiled output
+/re/*
+!/re/dis.sh
+!/re/dumpconst.py
+!/re/README.md
 
 # capture artifacts
 capture/*.pcapng

@@ -89,11 +89,27 @@ cmake --build build -j
 Sanity check: `ls /dev/audient_id*` should list a node and `monixctl status` should
 print the sample rate + monitor state.
 
-## Status
+## Device support
 
-Verified live against an **iD24**. Other iD-series devices are matched by USB PID
-(`lib/monix.cpp`) and should work where the protocol matches, but only the iD24 has
-been hardware-tested.
+The library is **profile-driven**: on connect it detects the USB PID and loads a
+per-device profile (counts, mixer node layout, routing scheme) reverse-engineered
+from the macOS app — see [`docs/DEVICES.md`](docs/DEVICES.md). The GUI builds its
+channel strips and routing matrix from that profile, so the mixer adapts to each
+model. Unknown PIDs fall back to the iD24 layout.
+
+| Model | Detect | Mixer/faders | Output routing | Tested |
+|-------|:------:|:------------:|:--------------:|:------:|
+| iD24  | ✅ | ✅ | ✅ formula | **hardware-verified** |
+| iD48  | ✅ | ✅ | ◐ formula (RE'd, untested) | binary only |
+| iD14 / iD22 / iD44 | ✅ | ✅ | ◐ table scheme not yet wired | binary only |
+| iD4   | ✅ | — (no mixer) | — | binary only |
+
+Non-iD24 models show an **"experimental"** banner; their routing UI is read-only
+until the table-scheme wire codes are decoded and someone with the hardware can
+confirm. Mixer faders/meters use the shared scheme and should work, but are
+unverified off the iD24.
+
+## Status
 
 - ✅ Kernel module — control + meter reads while audio plays (no card teardown).
 - ✅ Protocol library — routing, mixer crosspoints, sample rate, clock source,

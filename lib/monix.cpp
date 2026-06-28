@@ -1,8 +1,12 @@
 #include "monix.h"
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cerrno>
+#include <string>
+#include <fstream>
+#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -35,17 +39,40 @@ uint8_t masterSel(Master m) {
     return 0xff;
 }
 
+// Per-device profiles (see docs/DEVICES.md). Fields: name, pid, micInputs,
+// digitalInputs, dawReturns, outputs, loopbackOut(-1=none), hasMixer, hasRouting,
+// scheme, verified. MKII variants reuse their base sibling's layout (best guess).
 const DeviceInfo kDevices[] = {
-    {"iD4",0x0003,1,0,2,0},{"iD4 MKII",0x0009,1,0,2,0},
-    {"iD14",0x0002,2,8,4,0},{"iD14 MKII",0x0008,2,8,4,0},
-    {"iD22",0x0001,2,8,4,8},{"iD24",0x000d,2,10,4,14},
-    {"iD44",0x0005,4,16,4,16},{"iD44 MKII",0x000b,4,16,4,16},{"iD48",0x0012,8,16,4,16},
+    {"iD4",       0x0003, 2,  0,  0, 2, -1,   false, false, RoutingScheme::None,    false},
+    {"iD4 MKII",  0x0009, 2,  0,  0, 2, -1,   false, false, RoutingScheme::None,    false},
+    {"iD14",      0x0002, 2,  8,  4, 4, -1,   true,  true,  RoutingScheme::Table,   false},
+    {"iD14 MKII", 0x0008, 2,  8,  4, 4, -1,   true,  true,  RoutingScheme::Table,   false},
+    {"iD22",      0x0001, 2,  8,  6, 8, -1,   true,  true,  RoutingScheme::Table,   false},
+    {"iD24",      0x000d, 2,  8,  6, 6, 0x0a, true,  true,  RoutingScheme::Formula, true },
+    {"iD44",      0x0005, 4, 16, 10, 8, -1,   true,  true,  RoutingScheme::Table,   false},
+    {"iD44 MKII", 0x000b, 4, 16, 10, 8, -1,   true,  true,  RoutingScheme::Table,   false},
+    {"iD48",      0x0012, 4, 20,  8, 8, 0x16, true,  true,  RoutingScheme::Formula, false},
 };
 } // namespace
 
 const DeviceInfo* findDevice(uint16_t pid) {
     for (auto& d : kDevices) if (d.productId == pid) return &d;
     return nullptr;
+}
+
+// Scan sysfs for a connected Audient device and return its USB product id (0 if
+// none found). Lets Device pick the right profile without the caller knowing it.
+uint16_t connectedProductId() {
+    DIR* d = opendir("/sys/bus/usb/devices"); if (!d) return 0;
+    uint16_t pid = 0;
+    for (dirent* e; (e = readdir(d)); ) {
+        std::string b = std::string("/sys/bus/usb/devices/") + e->d_name;
+        std::ifstream vf(b + "/idVendor"); std::string v;
+        if (!(vf >> v) || v != "2708") continue;
+        std::ifstream pf(b + "/idProduct"); std::string p;
+        if (pf >> p) { pid = (uint16_t)strtol(p.c_str(), nullptr, 16); break; }
+    }
+    closedir(d); return pid;
 }
 
 // int16, 1/256 dB: 0x0000 = 0 dB (max), 0x8000 = mute. Map 0..1 -> [-60 dB .. 0 dB].
@@ -74,6 +101,11 @@ bool Device::open(const char* path) {
         if (path) break;
     }
     if (fd_ < 0) { err_ = "cannot open /dev/audient_id* (kernel module loaded?)"; return false; }
+    // Pick the device profile from the connected USB PID; fall back to the iD24
+    // (our verified reference) if the PID is unknown so the app still functions.
+    uint16_t pid = connectedProductId();
+    info_ = findDevice(pid);
+    if (!info_) info_ = findDevice(0x000d);   // iD24 fallback
     return true;
 }
 void Device::close() { if (fd_ >= 0) { ::close(fd_); fd_ = -1; } }
@@ -243,18 +275,34 @@ bool Device::setMixerCellRaw(int cell, int16_t v) { return ctlSet(E_MIX, 0x01, (
 
 // ---- routing ----
 bool Device::setRouting(int out, uint8_t code) { return ctlSet(E_ROUTE, 0x06, (uint8_t)out, &code, 1); }
-bool Device::setOutputRouting(int l, int r, OutDest d) {
-    uint8_t cl, cr;
+
+// Output-routing source code for a destination, per the device's formula
+// (docs/DEVICES.md). Returns -1 if the destination/scheme isn't supported.
+// iD24 is hardware-verified; iD48 is RE'd-but-untested (different constants).
+static int routingCodeFor(const DeviceInfo* info, Device::OutDest d, int out) {
+    if (!info || info->scheme != RoutingScheme::Formula) return -1;
+    bool id48 = info->productId == 0x0012;
+    int lr = out & 1;                       // L/R within the output's stereo pair
     switch (d) {
-        case OutDest::Main: cl = 0x25; cr = 0x26; break;   // monitored mix (DAW+faders, dial-controlled)
-        case OutDest::Alt:  cl = 0x1e; cr = 0x1f; break;
-        case OutDest::CueA: cl = 0x20; cr = 0x21; break;
-        case OutDest::CueB: cl = 0x22; cr = 0x23; break;   // RE'd: Alt/Cue family = 0x1e+2*idx(+chan); idx2=CueB
-        case OutDest::DAW:  cl = (uint8_t)l; cr = (uint8_t)r; break;  // DAW Thru = direct passthrough (full level!)
-        case OutDest::Direct: cl = (uint8_t)l; cr = (uint8_t)r; break;
-        default: return false;
+        case Device::OutDest::DAW:
+        case Device::OutDest::Direct: return id48 ? (out >= 16 ? out - 8 : out) : out;
+        case Device::OutDest::Main:   return id48 ? 0x3f + lr : 0x25 + lr;        // type 1
+        case Device::OutDest::Alt:    return (id48 ? 0x32 : 0x1e) + 0 + lr;       // type 3 idx 0
+        case Device::OutDest::CueA:   return (id48 ? 0x32 : 0x1e) + 2 + lr;       // type 3 idx 1
+        case Device::OutDest::CueB:   return (id48 ? 0x32 : 0x1e) + 4 + lr;       // type 3 idx 2
     }
-    return setRouting(l, cl) && setRouting(r, cr);
+    return -1;
+}
+
+bool Device::setOutputRouting(int l, int r, OutDest d) {
+    if (!info_ || !info_->hasRouting) { err_ = "device has no routing"; return false; }
+    if (info_->scheme == RoutingScheme::Table) {
+        err_ = "routing not yet implemented for this model (table scheme — see docs/DEVICES.md)";
+        return false;
+    }
+    int cl = routingCodeFor(info_, d, l), cr = routingCodeFor(info_, d, r);
+    if (cl < 0 || cr < 0) { err_ = "unsupported routing destination"; return false; }
+    return setRouting(l, (uint8_t)cl) && setRouting(r, (uint8_t)cr);
 }
 
 // ---- meters ----
