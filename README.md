@@ -4,10 +4,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A standalone, native Linux control application **and** driver for Audient iD-series
-USB audio interfaces. Successor to the MixiD experiments — built from scratch around
-a properly reverse-engineered protocol so it can do what the official app does:
-live state sync, channel faders, routing, and VU metering, **while audio keeps
-playing**.
+USB audio interfaces. Inspired by the great work of
+[MixiD](https://github.com/TheOnlyJoey/MixiD), Monix takes a different technical
+approach — a companion kernel module plus a protocol mapped from the official app —
+so it can do what the vendor software does: live state sync, channel faders,
+routing, and VU metering, **while audio keeps playing**.
 
 ## Compatibility
 
@@ -54,7 +55,8 @@ sudo pacman -S --needed base-devel cmake git linux-headers alsa-lib glfw mesa dk
 # Debian / Ubuntu / Pop!_OS
 sudo apt install build-essential cmake git linux-headers-$(uname -r) \
                  libasound2-dev libglfw3-dev libgl1-mesa-dev dkms \
-                 libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
+                 libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+                 libwayland-dev
 
 # Fedora
 sudo dnf install gcc-c++ cmake git kernel-devel alsa-lib-devel glfw-devel \
@@ -178,7 +180,10 @@ want as default in your sound settings.
 - **S/PDIF crackling** — set Clock source to **Optical** in the System Panel so the
   iD slaves to the incoming stream, and use the same sample rate at both ends.
 
-## Credits / lineage
+## Credits
 
-Protocol reverse-engineered from the official macOS `iD.app`. Earlier groundwork
-(the SET control values, device list) came from the MixiD project.
+Huge thanks to [**MixiD**](https://github.com/TheOnlyJoey/MixiD) by TheOnlyJoey —
+the project that first brought Audient iD control to Linux and mapped out a lot of
+the groundwork (control values, device list). Monix builds on that spirit with a
+different architecture (kernel-module relay + a protocol decoded from the official
+macOS `iD.app`). If you have an Audient interface on Linux, go give MixiD a look too.
