@@ -1,0 +1,4 @@
+# Allow non-root access to the Audient iD control relay char device created by
+# the audient_id kernel module. Adjust GROUP to match your distro (commonly
+# "audio" or "plugdev"); the user running MixiD must be a member of it.
+KERNEL=="audient_id[0-9]*", SUBSYSTEM=="misc", MODE="0660", GROUP="audio"

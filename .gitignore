@@ -1,0 +1,26 @@
+# build output
+/build/
+/app/build/
+/lib/build/
+
+# kernel module artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+.*.cmd
+*.symvers
+modules.order
+Module.symvers
+.tmp_versions/
+
+# reverse-engineering working files (do not redistribute the macOS binary)
+/re/
+
+# capture artifacts
+capture/*.pcapng
+capture/*.pcap
+
+# runtime UI state
+imgui.ini
