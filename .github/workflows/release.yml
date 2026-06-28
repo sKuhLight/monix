@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Build on the oldest still-supported Ubuntu for the widest glibc compatibility.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        run: echo "TAG=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config \
+            libasound2-dev libglfw3-dev libgl1-mesa-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev
+
+      - name: Build app
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+
+      - name: Assemble release bundle
+        run: |
+          DIR="monix-${TAG}-linux-x86_64"
+          mkdir -p "$DIR/bin"
+          cp -r lib app tools driver setup docs CMakeLists.txt README.md LICENSE install.sh "$DIR"/
+          cp build/app/monix-gui build/monixctl "$DIR/bin/"
+          echo "${TAG#v}" > "$DIR/VERSION"
+          tar czf "$DIR.tar.gz" "$DIR"
+          sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256"
+          echo "ASSET=$DIR.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Write release notes
+        run: |
+          cat > NOTES.md <<'EOF'
+          Native Linux control panel + driver for Audient iD interfaces.
+
+          ## Install
+          ```sh
+          tar xzf monix-TAG-linux-x86_64.tar.gz
+          cd monix-TAG-linux-x86_64
+          ./install.sh
+          monix-gui
+          ```
+          `install.sh` installs deps, builds the kernel module for your kernel
+          (via DKMS, so it survives kernel updates), installs the prebuilt app,
+          the udev rule, and adds you to the `audio` group. Full details in the
+          bundled `README.md`.
+
+          ## Requirements
+          - Kernel ≥ 5.9; PipeWire for the Windows-style device split (optional).
+          - Any modern distro (Arch/CachyOS, Debian 12+, Ubuntu 22.04+, Fedora).
+
+          ## Status
+          Hardware-verified on the **iD24**. Other iD models (iD4/14/22/44/48) are
+          detected and supported best-effort (marked "experimental" in the app).
+          EOF
+          sed -i "s/TAG/${TAG}/g" NOTES.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            "$ASSET" "$ASSET.sha256" \
+            --title "Monix $TAG" \
+            --notes-file NOTES.md

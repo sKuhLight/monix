@@ -65,8 +65,24 @@ sudo dnf install gcc-c++ cmake git kernel-devel alsa-lib-devel glfw-devel \
 
 ## Install
 
+### Easiest: a release bundle
+Grab the latest `monix-*-linux-x86_64.tar.gz` from
+[**Releases**](https://github.com/sKuhLight/monix/releases), then:
 ```sh
-git clone <repo-url> monix && cd monix
+tar xzf monix-*-linux-x86_64.tar.gz
+cd monix-*-linux-x86_64
+./install.sh           # installs deps, builds the kernel module (DKMS), installs the app
+monix-gui
+```
+The bundle ships prebuilt app binaries; only the kernel module is built locally
+(it has to be — modules are tied to your running kernel). `install.sh` also works
+from a source checkout (it builds the app too if there's no prebuilt binary).
+
+### From source
+
+```sh
+git clone https://github.com/sKuhLight/monix && cd monix
+./install.sh           # or follow the manual steps below
 ```
 
 ### 1) Kernel module (companion driver, not a custom kernel)
