@@ -11,8 +11,25 @@ namespace monix {
 
 constexpr uint16_t kVendorId = 0x2708;
 
-struct DeviceInfo { const char* name; uint16_t productId; int micInputs, digitalInputs, outputs, digitalOutputs; };
-const DeviceInfo* findDevice(uint16_t productId);
+// How a device computes output-routing source codes (see docs/DEVICES.md).
+enum class RoutingScheme { None, Table, Formula };
+
+// Per-device profile, reverse-engineered from the macOS app (docs/DEVICES.md).
+// Counts drive the mixer strip list and routing matrix; `verified` is true only
+// for hardware-tested models (currently just the iD24). The mixer nodes are, in
+// order: micInputs mics, then digitalInputs digital channels, then dawReturns DAW
+// playback returns — so mixerNodes() strips total.
+struct DeviceInfo {
+    const char* name; uint16_t productId;
+    int  micInputs, digitalInputs, dawReturns, outputs;
+    int  loopbackOut;            // loopback-to-host output index, -1 if none
+    bool hasMixer, hasRouting;
+    RoutingScheme scheme;
+    bool verified;
+    int  mixerNodes() const { return micInputs + digitalInputs + dawReturns; }
+};
+const DeviceInfo* findDevice(uint16_t productId);   // nullptr if unknown
+uint16_t connectedProductId();                       // sysfs scan; 0 if none
 
 enum class Master { Mono, MonoMode, Phase, Cut, Dim, Talkback, Alt };   // entity 0x36 toggles
 enum class MonoMode { Center = 0, Left = 1, Right = 2 };
@@ -26,6 +43,10 @@ public:
     bool isOpen() const { return fd_ >= 0; }
     void close();
     const char* lastError() const { return err_; }
+
+    // Profile of the connected device (detected via sysfs PID on open()). Falls
+    // back to the iD24 profile if the PID is unknown. Never null after open().
+    const DeviceInfo* info() const { return info_; }
 
     // ---- Monitor section (entity 0x36) ----
     bool setMaster(Master m, bool on);          // Mono/Phase/Cut/Dim/Talkback/Alt
@@ -98,6 +119,7 @@ private:
               void* data, uint8_t len, bool in);
     int  fd_ = -1;
     const char* err_ = "";
+    const DeviceInfo* info_ = nullptr;
 };
 
 // Volume scaling: device uses int16 in 1/256 dB (0x0000 = 0 dB, 0x8000 = mute).

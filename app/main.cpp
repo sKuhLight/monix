@@ -40,14 +40,10 @@ static uint16_t detectPid() {
     closedir(d); return pid ? pid : 0x000d;
 }
 
-// The 16 mixer nodes in device order (from RE: defaultMixMap):
-//   Mic1, Mic2, Digi1..Digi8 (optical in), DAW1..DAW6 (computer returns).
-// A visible strip is either one mono node or a linked stereo pair (node, node+1).
-static const char* NODE_NAME[16] = {
-    "Mic 1","Mic 2","Digi 1","Digi 2","Digi 3","Digi 4","Digi 5","Digi 6",
-    "Digi 7","Digi 8","DAW 1","DAW 2","DAW 3","DAW 4","DAW 5","DAW 6"};
-static const char* PAIR_NAME[8] = {
-    "Mic 1+2","Digi 1+2","Digi 3+4","Digi 5+6","Digi 7+8","DAW 1+2","DAW 3+4","DAW 5+6"};
+// Mixer nodes are, in device order (from RE: defaultMixMap): the analogue mics,
+// then the digital/optical inputs, then the DAW returns. Names are generated from
+// the device profile (counts). A visible strip is one mono node or a linked stereo
+// pair (node, node+1).
 struct VStrip { std::string name; int node; bool stereo; bool mic; };
 
 int main() {
@@ -64,29 +60,51 @@ int main() {
     monixtheme::apply();
 
     Device dev; bool connected = dev.open();
-    uint16_t pid = detectPid();
-    const DeviceInfo* info = findDevice(pid);
-    const char* devName = info ? info->name : "iD";
+    const DeviceInfo* info = dev.info();             // set from the connected PID
+    if (!info) info = findDevice(detectPid());        // not connected: best-effort by sysfs
+    if (!info) info = findDevice(0x000d);             // last resort: iD24 layout
+    const char* devName = info->name;
 
-    // Stereo-link mask, one bool per adjacent node pair (8 pairs). When linked the
-    // two mono nodes merge into one stereo strip. DAW returns default to linked.
-    bool link[8] = {false,false,false,false,false,true,true,true};
+    // Mixer geometry from the profile.
+    const int NODES     = info->hasMixer ? info->mixerNodes() : 0;
+    const int firstDigi = info->micInputs;                       // mics: [0, firstDigi)
+    const int firstDaw  = info->micInputs + info->digitalInputs; // DAW: [firstDaw, NODES)
+    auto nodeName = [&](int n) -> std::string {
+        char b[24];
+        if (n < firstDigi)     snprintf(b, sizeof b, "Mic %d", n + 1);
+        else if (n < firstDaw) snprintf(b, sizeof b, "Digi %d", n - firstDigi + 1);
+        else                   snprintf(b, sizeof b, "DAW %d", n - firstDaw + 1);
+        return b;
+    };
+    auto pairName = [&](int a) -> std::string {
+        char b[32];
+        if (a < firstDigi)     snprintf(b, sizeof b, "Mic %d+%d", a + 1, a + 2);
+        else if (a < firstDaw) snprintf(b, sizeof b, "Digi %d+%d", a-firstDigi+1, a-firstDigi+2);
+        else                   snprintf(b, sizeof b, "DAW %d+%d", a-firstDaw+1, a-firstDaw+2);
+        return b;
+    };
+
+    // Stereo-link mask, one entry per adjacent node pair. DAW returns default linked.
+    const int nPairs = NODES / 2;
+    std::vector<char> link(nPairs, 0);
+    for (int p = 0; p < nPairs; p++) if (2 * p >= firstDaw) link[p] = 1;
     auto buildStrips = [&]() {
         std::vector<VStrip> v;
-        for (int p = 0; p < 8; p++) {
+        for (int p = 0; p < nPairs; p++) {
             int a = p * 2;
-            if (link[p]) v.push_back({PAIR_NAME[p], a, true, a < 2});
-            else { v.push_back({NODE_NAME[a], a, false, a < 2});
-                   v.push_back({NODE_NAME[a+1], a+1, false, (a+1) < 2}); }
+            if (link[p]) v.push_back({pairName(a), a, true, a < firstDigi});
+            else { v.push_back({nodeName(a), a, false, a < firstDigi});
+                   v.push_back({nodeName(a+1), a+1, false, (a+1) < firstDigi}); }
         }
+        if (NODES & 1) v.push_back({nodeName(NODES-1), NODES-1, false, (NODES-1) < firstDigi});
         return v;
     };
     std::vector<VStrip> strips = buildStrips();
 
-    // UI state is indexed by NODE (0..15), so it survives link/unlink changes.
-    const int NODES = 16;
-    std::vector<float> fader(NODES, 0.75f), pan(NODES, 0.0f), meter(NODES, 0.0f);
-    std::vector<bool>  mute(NODES, false), solo(NODES, false), phase(NODES, false);
+    // UI state indexed by NODE so it survives link/unlink changes (min size 1).
+    const int NST = NODES > 0 ? NODES : 1;
+    std::vector<float> fader(NST, 0.75f), pan(NST, 0.0f), meter(NST, 0.0f);
+    std::vector<bool>  mute(NST, false), solo(NST, false), phase(NST, false);
     float mainVol = 0.6f;
     bool master[6] = {false,false,false,false,false,false};       // Dim,Alt,Talk,Phase,Mono,Cut
     const char* masterName[6] = {"DIM","ALT","TB","\xC3\x98","MONO","CUT"};
@@ -95,13 +113,16 @@ int main() {
     const char* mixName[3] = {"MASTER MIX", "CUE A", "CUE B"};
     int   source = 2;           // MIC/OPT/DAW selector (display)
     bool  showRouting = false, showDevices = false;
-    struct OutPair { const char* name; int l, r; };
-    // iD24 routable outputs (matches the official System Panel). Analogue 0-5 and
-    // optical/digital 8-11 (RE: routing entity 0x33 addresses outputs 0–5, 8–11).
-    std::vector<OutPair> outPairs = {
-        {"Main 1+2", 0, 1}, {"Line 3+4", 2, 3}, {"Phones 5+6", 4, 5},
-        {"Optical 1+2", 8, 9}, {"Optical 3+4", 10, 11},
-    };
+    struct OutPair { std::string name; int l, r; };
+    // Routable analogue output pairs, generated from the profile's output count.
+    std::vector<OutPair> outPairs;
+    for (int o = 0; o + 1 < info->outputs; o += 2) {
+        char nm[24];
+        if (o == 0)                          snprintf(nm, sizeof nm, "Main 1+2");
+        else if (o + 2 >= info->outputs)     snprintf(nm, sizeof nm, "Phones %d+%d", o+1, o+2);
+        else                                 snprintf(nm, sizeof nm, "Out %d+%d", o+1, o+2);
+        outPairs.push_back({nm, o, o + 1});
+    }
     std::vector<int> routeSel(outPairs.size(), 0); // index into OutDest (Main..DAW)
     float outMeter[6] = {0,0,0,0,0,0};   // Master L/R, Cue A L/R, Cue B L/R (off1)
     bool  mainActive = false; int sampleRate = 0; bool meterEnabled = true;
@@ -112,7 +133,7 @@ int main() {
     if (loadState(saved)) {
         for (int i = 0; i < NODES && i < (int)saved.faders.size(); i++) fader[i] = saved.faders[i];
         for (int i = 0; i < NODES && i < (int)saved.phase.size(); i++)  phase[i] = saved.phase[i] != 0;
-        for (int i = 0; i < 8 && i < (int)saved.links.size(); i++)      link[i] = saved.links[i] != 0;
+        for (int i = 0; i < nPairs && i < (int)saved.links.size(); i++) link[i] = saved.links[i] != 0;
         strips = buildStrips();
     }
     auto snap = [&]{ MonixState s; s.faders = fader; s.phones = -1;
@@ -190,8 +211,8 @@ int main() {
             }
             if (meterEnabled && t - lastMeter > 70) { lastMeter = t;
                 uint8_t blk[32]={0};
-                if (dev.readMeterBlock(0, blk, 32) > 0)   // 16 input meters, uint16 LE
-                    for (int n=0;n<NODES;n++){            // contiguous in node order (RE)
+                if (dev.readMeterBlock(0, blk, 32) > 0)   // up to 16 input meters, uint16 LE
+                    for (int n=0;n<NODES && n<16;n++){    // contiguous in node order (RE)
                         float lv = (blk[n*2] | (blk[n*2+1]<<8)) / 65535.0f;
                         meter[n]=meter[n]*0.5f+lv*0.5f; }
                 uint8_t ob[12]={0};
@@ -225,7 +246,9 @@ int main() {
             ImGui::SetNextItemWidth(54);
             if (ImGui::SliderFloat("##pan", &pv, 0,1, s.stereo?"BAL":"PAN")) { pan[n]=pv*2-1; pushStrip(s); }
             // STEREO/MONO link toggle (links node pair n/n+1)
-            if (toggle(s.stereo?"STEREO":"MONO", s.stereo, ImVec2(60,0))) { link[n/2] = !link[n/2]; relink = true; }
+            if (n/2 < nPairs) {
+                if (toggle(s.stereo?"STEREO":"MONO", s.stereo, ImVec2(60,0))) { link[n/2] = !link[n/2]; relink = true; }
+            } else ImGui::TextDisabled("MONO");
             // solo / mute
             if (toggle("S", solo[n], ImVec2(25,0))) solo[n]=!solo[n]; ImGui::SameLine();
             if (toggle("M", mute[n], ImVec2(25,0))) { mute[n]=!mute[n]; pushStrip(s); }
@@ -268,6 +291,9 @@ int main() {
         ImGui::PopStyleColor();
         ImGui::TextDisabled("%s   %d Hz", devName, sampleRate);
         if (!connected) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f,0.4f,0.4f,1)); ImGui::TextUnformatted("no device"); ImGui::PopStyleColor(); }
+        else if (!info->verified) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.6f,0.2f,1));
+            ImGui::TextWrapped("experimental: %s is reverse-engineered but untested", devName);
+            ImGui::PopStyleColor(); }
         ImGui::Separator();
         // source select MIC / OPT / DAW
         const char* src[3] = {"MIC","OPT","DAW"};
@@ -306,15 +332,25 @@ int main() {
         if (showRouting) {
             ImGui::SetNextWindowSize(ImVec2(620, 360), ImGuiCond_FirstUseEver);
             ImGui::Begin("System Panel \xE2\x80\x94 Routing", &showRouting);
+            bool routingReady = info->hasRouting && info->scheme == RoutingScheme::Formula;
+            if (!routingReady) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.6f,0.2f,1));
+                ImGui::TextWrapped(info->hasRouting
+                    ? "Routing for this model is reverse-engineered but not yet wired up "
+                      "(table scheme \xE2\x80\x94 see docs/DEVICES.md). Mixer/faders work; "
+                      "output routing is read-only for now."
+                    : "This model has no software output routing.");
+                ImGui::PopStyleColor(); ImGui::Separator();
+            }
             const char* dest[5] = {"Main Mix","Alt Spk","Cue A","Cue B","DAW Thru"};
-            if (ImGui::BeginTable("routing", 6, ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_SizingStretchProp)) {
+            if (routingReady && ImGui::BeginTable("routing", 6, ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Output");
                 for (int c=0;c<5;c++) ImGui::TableSetupColumn(dest[c]);
                 ImGui::TableHeadersRow();
                 static int pendPair = -1, pendPrev = 0;   // DAW-Thru confirm
                 for (size_t p=0;p<outPairs.size();p++) {
                     ImGui::TableNextRow(); ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(outPairs[p].name);
+                    ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(outPairs[p].name.c_str());
                     for (int c=0;c<5;c++) {
                         ImGui::TableNextColumn(); ImGui::PushID((int)p*8+c);
                         int before = routeSel[p];
