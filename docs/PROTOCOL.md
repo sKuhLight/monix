@@ -78,6 +78,13 @@ Written via SET_CUR with selector 0x01, channel = controlNumber → matches our
 its pair (L→busL, R→busR, and L→busR / R→busL **set to 0**); leaving the cross
 cells at their old mono values is why a linked pair appeared to "only change left".
 
+**Optical in/out mode** (`SystemModel::setOpticalInputMode/OutputMode`): input =
+selector **0x00** (entity 0x01), output = selector **0x01** (entity 0x14) — distinct
+units, *not* swapped. Wire value from `serialiseSystemSettings` (`mode==0 → "adat"`,
+else `"spdif"`): **0 = ADAT, 1 = S/PDIF**. (Capture-era code had this inverted, so
+the S/PDIF and ADAT buttons set the opposite format — fixed.) Verified live: our
+iD24 read input=1 (S/PDIF), output=0 (ADAT).
+
 **Clock / S/PDIF** (ALSA controls, not ep0): `Audient Clock Selector Clock Source`
 enum {0 = Internal, 1 = Optical1}; `Audient Optical1 Clock Validity` (CARD iface)
 = on when a valid optical/S/PDIF clock is present. Feeding S/PDIF/ADAT into the

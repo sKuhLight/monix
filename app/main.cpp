@@ -349,8 +349,11 @@ int main() {
                 }
             }
             ImGui::Separator();
-            // Digital I/O optical mode
-            static int digIn = 0, digOut = 0;   // 0 = S/PDIF, 1 = ADAT
+            // Digital I/O optical mode (0 = S/PDIF, 1 = ADAT in the radios)
+            static int digIn = 0, digOut = 0; static double digPoll = 0;
+            if (connected) { double tt = now_ms(); if (tt - digPoll > 1000) { digPoll = tt;
+                bool a; if (dev.getDigitalInputADAT(a)) digIn = a?1:0;
+                if (dev.getDigitalOutputADAT(a)) digOut = a?1:0; } }
             ImGui::TextDisabled("Digital In: "); ImGui::SameLine();
             if (ImGui::RadioButton("S/PDIF##i", &digIn, 0) && connected) dev.setDigitalInputADAT(false); ImGui::SameLine();
             if (ImGui::RadioButton("ADAT##i", &digIn, 1) && connected) dev.setDigitalInputADAT(true);

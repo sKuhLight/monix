@@ -118,8 +118,11 @@ bool Device::setAltTrim(float v) { int16_t x = floatToVol(v); return ctlSet(E_MO
 bool Device::setTalkbackSource(TalkbackSource s) { uint8_t c = (uint8_t)s; return ctlSet(E_MON, 0x08, 0, &c, 1); }
 
 // ---- digital optical I/O mode (S/PDIF vs ADAT) ----
-bool Device::setDigitalInputADAT(bool adat)  { int32_t v = adat?1:0; return ctlSet(0x01, 0x00, 0, &v, 4); }
-bool Device::setDigitalOutputADAT(bool adat) { int32_t v = adat?1:0; return ctlSet(0x14, 0x01, 0, &v, 4); }
+// OpticalMode wire value (RE'd from serialiseSystemSettings): 0 = ADAT, 1 = S/PDIF.
+bool Device::setDigitalInputADAT(bool adat)  { int32_t v = adat?0:1; return ctlSet(0x01, 0x00, 0, &v, 4); }
+bool Device::setDigitalOutputADAT(bool adat) { int32_t v = adat?0:1; return ctlSet(0x14, 0x01, 0, &v, 4); }
+bool Device::getDigitalInputADAT(bool& adat)  { int32_t v=-1; if (!ctlGet(0x01,0x00,0,&v,4)) return false; adat = (v==0); return true; }
+bool Device::getDigitalOutputADAT(bool& adat) { int32_t v=-1; if (!ctlGet(0x14,0x01,0,&v,4)) return false; adat = (v==0); return true; }
 
 // ---- audible monitor volume via ALSA ("Speaker Playback Volume") ----
 namespace {

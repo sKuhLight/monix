@@ -55,9 +55,12 @@ public:
     bool setSampleRate(int hz);                 // entity 0x29 sel 0x01 (int32)
     int  getSampleRate();                       // entity 0x3e sel 0x06 (int32), -1 on fail
 
-    // ---- Digital I/O optical mode (false = S/PDIF, true = ADAT) ----
-    bool setDigitalInputADAT(bool adat);        // entity 0x01 sel 0x00 (int32 0/1)
-    bool setDigitalOutputADAT(bool adat);       // entity 0x14 sel 0x01 (int32 0/1)
+    // ---- Digital I/O optical mode (adat=false → S/PDIF, adat=true → ADAT) ----
+    // Wire value (RE'd): 0 = ADAT, 1 = S/PDIF.
+    bool setDigitalInputADAT(bool adat);        // entity 0x01 sel 0x00 (int32)
+    bool setDigitalOutputADAT(bool adat);       // entity 0x14 sel 0x01 (int32)
+    bool getDigitalInputADAT(bool& adat);
+    bool getDigitalOutputADAT(bool& adat);
 
     // ---- Headphones (entity 0x0c sel 0x02) ----
     bool setHeadphoneVolume(int hp /*0 or 1*/, float v);
