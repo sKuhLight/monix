@@ -283,12 +283,20 @@ int main() {
             vmeter(outMeter[m*2],   ImVec2(7, m==0?54:40)); ImGui::SameLine(0,2);
             vmeter(outMeter[m*2+1], ImVec2(7, m==0?54:40));
             ImGui::EndGroup();
-            // per-bus master level (FU 0x0c): Main / Cue A / Cue B
-            ImGui::SetNextItemWidth(150);
-            if (ImGui::SliderFloat("##bvol", &busVol[m], 0,1, "%.0f%%")) {
-                busActive = m; if (connected) dev.setBusVolume((Device::Bus)m, busVol[m]);
+            // Per-bus master level (FU 0x0c). Main has no fader — it's the big
+            // monitor dial (mirrors the hardware dial); only Cue A/B get one.
+            if (m == 0) {
+                ImGui::TextDisabled("level: monitor dial");
+            } else {
+                float pct = busVol[m] * 100.0f;
+                ImGui::SetNextItemWidth(150);
+                if (ImGui::SliderFloat("##bvol", &pct, 0, 100, "%.0f%%")) {
+                    busVol[m] = pct / 100.0f;
+                    if (connected) dev.setBusVolume((Device::Bus)m, busVol[m]);
+                }
+                if (ImGui::IsItemActive()) busActive = m;     // hold poll off while dragging
+                else if (busActive == m) busActive = -1;
             }
-            if (busActive == m && !ImGui::IsItemActive()) busActive = -1;
             ImGui::Dummy(ImVec2(0,6));
             ImGui::PopID();
         }
