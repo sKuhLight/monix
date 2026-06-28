@@ -24,30 +24,95 @@ docs/     PROTOCOL.md — reverse-engineering notes / protocol spec
 re/       reverse-engineering working files (macOS app slice, scripts) [gitignored]
 ```
 
-## Build & run
+## Requirements
+
+A C++17 toolchain, CMake ≥ 3.16, git, your **kernel headers**, and dev packages
+for **ALSA**, **GLFW**, and **OpenGL**. Dear ImGui is fetched automatically by
+CMake (first build needs internet). DKMS is optional but recommended — it rebuilds
+the module automatically on kernel updates.
 
 ```sh
-# 1) kernel module (once)
-cd driver && make && sudo make install && sudo modprobe audient_id && cd ..
-#    ensure your user is in the 'audio' group (the udev rule grants access)
+# Arch / CachyOS / Manjaro  (use headers matching your kernel: linux-cachyos-headers, …)
+sudo pacman -S --needed base-devel cmake git linux-headers alsa-lib glfw mesa dkms
 
-# 2) library + CLI + GUI
+# Debian / Ubuntu / Pop!_OS
+sudo apt install build-essential cmake git linux-headers-$(uname -r) \
+                 libasound2-dev libglfw3-dev libgl1-mesa-dev dkms
+
+# Fedora
+sudo dnf install gcc-c++ cmake git kernel-devel alsa-lib-devel glfw-devel \
+                 mesa-libGL-devel dkms
+```
+
+## Install
+
+```sh
+git clone <repo-url> monix && cd monix
+```
+
+### 1) Kernel module (companion driver, not a custom kernel)
+
+A small out-of-tree module that relays control transfers from inside the kernel so
+the GUI works while audio plays. It declares the device, so once installed it
+**auto-loads when you plug the interface in** — no boot-time setup.
+
+**Recommended — DKMS** (survives kernel upgrades):
+```sh
+sudo cp -r driver /usr/src/audient_id-0.1
+sudo dkms add     -m audient_id -v 0.1
+sudo dkms install -m audient_id -v 0.1
+sudo cp driver/99-audient-id.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+```
+
+**Or — plain make** (rebuild yourself after each kernel update):
+```sh
+cd driver && make && sudo make install && cd ..   # builds + installs module + udev rule
+sudo modprobe audient_id                          # load now (or just replug the device)
+```
+
+Then add yourself to the `audio` group (the udev rule grants it access to
+`/dev/audient_id*`) and re-login:
+```sh
+sudo usermod -aG audio "$USER"
+```
+
+### 2) App + CLI
+
+```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-./build/monixctl status      # CLI: dump live device state
-./build/app/monix-gui        # the GUI control panel
+./build/app/monix-gui     # the GUI control panel
+./build/monixctl status   # CLI: dump live device state
 ```
+
+Sanity check: `ls /dev/audient_id*` should list a node and `monixctl status` should
+print the sample rate + monitor state.
 
 ## Status
 
-- ✅ Driver (kernel module) — control + read while audio plays.
-- ✅ Protocol library (`lib/`) — verified live: monitor volume, master toggles,
-  sample rate, routing/levels read back; all controls settable.
-- ✅ GUI (`app/`) — dark-violet, Audient-style: input strips (fader/phase/meter),
-  monitor section (main/phones + Dim/Alt/Talk/Ø/Mono/Mute), live polling.
-- 🔬 In progress: input-meter scaling (entity 52), routing UI, full fader
-  readback via the StateSynchroniser block read.
+Verified live against an **iD24**. Other iD-series devices are matched by USB PID
+(`lib/monix.cpp`) and should work where the protocol matches, but only the iD24 has
+been hardware-tested.
+
+- ✅ Kernel module — control + meter reads while audio plays (no card teardown).
+- ✅ Protocol library — routing, mixer crosspoints, sample rate, clock source,
+  optical (ADAT/S-PDIF) mode, monitor/master toggles, talkback, phones; control
+  map decoded from the macOS app and verified on hardware.
+- ✅ GUI — dark-violet, Audient-style: channel strips with stereo/mono link,
+  fader/pan/phase/meter, Master/Cue A/B mixes, monitor section, and a System Panel
+  (routing matrix incl. digital outs, sample rate, clock source with S-PDIF lock
+  warning, digital I/O mode, trims).
+
+## Troubleshooting
+
+- **No `/dev/audient_id*`** — module didn't load. Check `lsmod | grep audient` and
+  `dmesg | grep audient_id`; ensure kernel headers are installed and (Arch) match
+  the running kernel.
+- **GUI says "no device" / permission denied** — not in the `audio` group yet
+  (re-login after `usermod`), or the udev rule isn't installed.
+- **S/PDIF crackling** — set Clock source to **Optical** in the System Panel so the
+  iD slaves to the incoming stream, and use the same sample rate at both ends.
 
 ## Credits / lineage
 
