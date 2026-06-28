@@ -259,6 +259,18 @@ bool Device::setHeadphoneVolume(int hp, float v) {
     return ctlSet(E_HP, 0x02, l, &x, 2) && ctlSet(E_HP, 0x02, r, &x, 2);
 }
 
+// Mix-bus master (FU 0x0c sel 0x02): Main ch 1/2, Cue A 3/4, Cue B 5/6.
+bool Device::setBusVolume(Bus bus, float v) {
+    int16_t x = floatToVol(v);
+    uint8_t l = (uint8_t)((int)bus * 2 + 1), r = (uint8_t)((int)bus * 2 + 2);
+    return ctlSet(E_HP, 0x02, l, &x, 2) && ctlSet(E_HP, 0x02, r, &x, 2);
+}
+bool Device::getBusVolume(Bus bus, float& out) {
+    int16_t x = 0; uint8_t l = (uint8_t)((int)bus * 2 + 1);
+    if (!ctlGet(E_HP, 0x02, l, &x, 2)) return false;
+    out = volToFloat(x); return true;
+}
+
 // ---- input ----
 bool Device::setInputPhase(int ch, bool on) { uint8_t b = on ? 1 : 0; return ctlSet(E_IN, 0x0d, (uint8_t)ch, &b, 1); }
 bool Device::setInputGainRaw(int ch, int16_t v) { return ctlSet(E_IN, 0x0b, (uint8_t)ch, &v, 2); }

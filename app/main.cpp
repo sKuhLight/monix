@@ -125,6 +125,8 @@ int main() {
     }
     std::vector<int> routeSel(outPairs.size(), 0); // index into OutDest (Main..DAW)
     float outMeter[6] = {0,0,0,0,0,0};   // Master L/R, Cue A L/R, Cue B L/R (off1)
+    float busVol[3] = {0.8f,0.8f,0.8f};  // Main / Cue A / Cue B master levels (FU 0x0c)
+    int   busActive = -1;                // which bus fader is being dragged (-1 = none)
     bool  mainActive = false; int sampleRate = 0; bool meterEnabled = true;
     double lastState = 0, lastMeter = 0;
 
@@ -208,6 +210,7 @@ int main() {
                 sampleRate = dev.getSampleRate();
                 float mv; if (!mainActive && dev.getMonitorVolume(mv)) mainVol = mv;
                 for (int m=0;m<6;m++){ bool b=false; if (dev.getMaster(masterEnum[m],b)) master[m]=b; }
+                for (int m=0;m<3;m++) if (busActive != m) { float bv; if (dev.getBusVolume((Device::Bus)m, bv)) busVol[m]=bv; }
             }
             if (meterEnabled && t - lastMeter > 70) { lastMeter = t;
                 uint8_t blk[32]={0};
@@ -269,6 +272,7 @@ int main() {
         ImGui::SameLine();
         ImGui::BeginChild("master", ImVec2(midW, H-20), true);
         for (int m=0;m<3;m++) {
+            ImGui::PushID(m);
             bool sel = curMix==m;
             if (sel) ImGui::PushStyleColor(ImGuiCol_Button, monixtheme::kAccent);
             if (ImGui::Button(mixName[m], ImVec2(120, m==0?54:40))) curMix=m;
@@ -279,8 +283,16 @@ int main() {
             vmeter(outMeter[m*2],   ImVec2(7, m==0?54:40)); ImGui::SameLine(0,2);
             vmeter(outMeter[m*2+1], ImVec2(7, m==0?54:40));
             ImGui::EndGroup();
+            // per-bus master level (FU 0x0c): Main / Cue A / Cue B
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::SliderFloat("##bvol", &busVol[m], 0,1, "%.0f%%")) {
+                busActive = m; if (connected) dev.setBusVolume((Device::Bus)m, busVol[m]);
+            }
+            if (busActive == m && !ImGui::IsItemActive()) busActive = -1;
+            ImGui::Dummy(ImVec2(0,6));
+            ImGui::PopID();
         }
-        ImGui::Dummy(ImVec2(0,8)); ImGui::TextDisabled("editing: %s", mixName[curMix]);
+        ImGui::TextDisabled("editing: %s", mixName[curMix]);
         ImGui::EndChild();
 
         // ===== monitor panel =====
@@ -310,14 +322,8 @@ int main() {
         for (int k=0;k<6;k++){ if (k%3) ImGui::SameLine();
             if (toggle(btn[k].l, master[btn[k].idx], ImVec2(62,34))) { master[btn[k].idx]=!master[btn[k].idx]; if(connected) dev.setMaster(masterEnum[btn[k].idx], master[btn[k].idx]); } }
         ImGui::Dummy(ImVec2(0,10));
-        // headphone output levels (entity 0x0c)
-        ImGui::TextDisabled("PHONES");
-        static float hp1 = 0.6f, hp2 = 0.6f;
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderFloat("##hp1", &hp1, 0,1, "HP1 %.0f%%", ImGuiSliderFlags_AlwaysClamp) && connected) dev.setHeadphoneVolume(0, hp1);
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderFloat("##hp2", &hp2, 0,1, "HP2 %.0f%%", ImGuiSliderFlags_AlwaysClamp) && connected) dev.setHeadphoneVolume(1, hp2);
-        ImGui::Dummy(ImVec2(0,6));
+        // (Cue A/B master levels = the headphone levels — live in the Master Mix
+        //  panel now, as per-bus faders.)
         // talkback source
         ImGui::TextDisabled("TALKBACK SRC"); ImGui::SetNextItemWidth(-1);
         static int tbSrc = 0; const char* tbN[3] = {"Mic 1","Mic 2","Digi 1"};
