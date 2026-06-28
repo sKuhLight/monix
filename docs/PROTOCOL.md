@@ -71,6 +71,19 @@ out)` computes the code written to entity 0x33 sel 0x06 for physical output `out
 (Earlier capture had Cue B as 0x23/0x24 — **off by one**; corrected to 0x22/0x23.)
 `out&1` is the L/R position within the output's stereo pair.
 
+**Mixer crosspoint addressing** (`UacMixerUnit::calculateMixerControlNumber`):
+`controlNumber = in*stride + out`, stride = 6 (MainL,MainR,CueAL,CueAR,CueBL,CueBR).
+Written via SET_CUR with selector 0x01, channel = controlNumber → matches our
+`ctlSet(0x3c, 0x01, cell)`. A **stereo** strip must drive all four crosspoints of
+its pair (L→busL, R→busR, and L→busR / R→busL **set to 0**); leaving the cross
+cells at their old mono values is why a linked pair appeared to "only change left".
+
+**Clock / S/PDIF** (ALSA controls, not ep0): `Audient Clock Selector Clock Source`
+enum {0 = Internal, 1 = Optical1}; `Audient Optical1 Clock Validity` (CARD iface)
+= on when a valid optical/S/PDIF clock is present. Feeding S/PDIF/ADAT into the
+iD while Clock Source = Internal causes clock-drift **crackling** — slave to
+Optical (index 1) when the optical input is in use.
+
 Legend: ✅ decoded from code & verified on hardware · 🔶 decoded from code, value
 table is data (confirm empirically) · 🔬 needs empirical confirmation.
 

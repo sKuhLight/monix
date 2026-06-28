@@ -127,16 +127,23 @@ int main() {
         float p = pan[n];
         float gl = v * (p > 0 ? 1.0f - p : 1.0f);
         float gr = v * (p < 0 ? 1.0f + p : 1.0f);
-        if (s.stereo) {                          // L source->busL, R source->busR
-            dev.setMixerCell(n * 6 + curMix * 2 + 0, gl);
-            dev.setMixerCell((n + 1) * 6 + curMix * 2 + 1, gr);
+        if (s.stereo) {                          // L src->busL, R src->busR; cross-feed muted
+            dev.setMixerCell(n * 6 + curMix * 2 + 0, gl);        // L src -> bus L
+            dev.setMixerCell(n * 6 + curMix * 2 + 1, 0.0f);      // L src -> bus R (off)
+            dev.setMixerCell((n + 1) * 6 + curMix * 2 + 0, 0.0f);// R src -> bus L (off)
+            dev.setMixerCell((n + 1) * 6 + curMix * 2 + 1, gr);  // R src -> bus R
         } else {                                 // mono source panned across bus
             dev.setMixerCell(n * 6 + curMix * 2 + 0, gl);
             dev.setMixerCell(n * 6 + curMix * 2 + 1, gr);
         }
     };
-    auto pushAll = [&]{ for (auto& s : strips) pushStrip(s); };
-    (void)pushAll;
+    // Re-push every strip across all three mix buses (used after a link change so
+    // stale cross-feed cells from the previous layout get cleared on the device).
+    auto pushAll = [&]{
+        int savedMix = curMix;
+        for (curMix = 0; curMix < 3; curMix++) for (auto& s : strips) pushStrip(s);
+        curMix = savedMix;
+    };
 
     auto knob = [&](const char* id, float* v, float sz) -> bool {
         // simple round knob via an invisible drag + custom draw
@@ -232,7 +239,7 @@ int main() {
             ImGui::EndGroup(); ImGui::SameLine(0, 16); ImGui::PopID();
         }
         ImGui::EndChild();
-        if (relink) { strips = buildStrips(); }
+        if (relink) { strips = buildStrips(); pushAll(); }   // apply new layout, clear stale cross-cells
 
         // ===== master mix / cue =====
         ImGui::SameLine();
@@ -362,10 +369,22 @@ int main() {
             static int mm = 0; const char* mmn[3] = {"L","C","R"};
             for (int k=0;k<3;k++){ ImGui::SameLine(); if (ImGui::RadioButton(mmn[k], &mm, k) && connected) dev.setMonoMode((MonoMode)k); }
             ImGui::Separator();
-            // Clock source (ALSA enum)
+            // Clock source (ALSA enum) — slave to optical when feeding S/PDIF/ADAT in
+            static int clk = 0; static bool optValid = false; static double clkPoll = 0;
+            if (connected) { double tt = now_ms(); if (tt - clkPoll > 1000) { clkPoll = tt;
+                int cs = dev.getClockSource(); if (cs >= 0) clk = cs; optValid = dev.getOpticalClockValid(); } }
             ImGui::TextDisabled("Clock source:"); ImGui::SameLine();
-            static int clk = 0; const char* clkn[2] = {"Internal","Dig 1"};
+            const char* clkn[2] = {"Internal","Optical (S/PDIF/ADAT)"};
             for (int k=0;k<2;k++){ ImGui::SameLine(); if (ImGui::RadioButton(clkn[k], &clk, k) && connected) dev.setClockSource(k); }
+            ImGui::SameLine(); ImGui::TextDisabled(optValid ? "[optical: locked]" : "[optical: no signal]");
+            // Warn if a digital clock is present but we're not slaving to it (crackle!)
+            if (optValid && clk == 0) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.6f,0.2f,1));
+                ImGui::TextWrapped("\xE2\x9A\xA0 Optical input detected but clock = Internal. This causes "
+                                   "crackling. Set Clock source to Optical to slave to it.");
+                ImGui::PopStyleColor();
+                if (ImGui::Button("Fix: slave to Optical") && connected) { dev.setClockSource(1); clk = 1; }
+            }
             ImGui::Separator();
             // Trim knobs
             static float dimTrim = 0.5f, altTrim = 0.5f;

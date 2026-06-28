@@ -182,6 +182,35 @@ bool Device::setClockSource(int index) {
     snd_ctl_close(ctl);
     return rc >= 0;
 }
+// Read an ALSA control's first value as a long (enum index or 0/1 bool). -1 on fail.
+static long readCtlValue(int card, const char* name) {
+    if (card < 0) return -1;
+    char hw[16]; snprintf(hw, sizeof hw, "hw:%d", card);
+    snd_ctl_t* ctl; if (snd_ctl_open(&ctl, hw, 0) < 0) return -1;
+    snd_ctl_elem_id_t* id; snd_ctl_elem_id_alloca(&id);
+    snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+    snd_ctl_elem_id_set_name(id, name);
+    snd_ctl_elem_info_t* inf; snd_ctl_elem_info_alloca(&inf);
+    snd_ctl_elem_info_set_id(inf, id);
+    if (snd_ctl_elem_info(ctl, inf) < 0) {   // try CARD iface (validity flags live there)
+        snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_CARD);
+        snd_ctl_elem_info_set_id(inf, id);
+        if (snd_ctl_elem_info(ctl, inf) < 0) { snd_ctl_close(ctl); return -1; }
+    }
+    snd_ctl_elem_value_t* val; snd_ctl_elem_value_alloca(&val);
+    snd_ctl_elem_value_set_id(val, id);
+    long out = -1;
+    if (snd_ctl_elem_read(ctl, val) >= 0) {
+        auto t = snd_ctl_elem_info_get_type(inf);
+        out = (t == SND_CTL_ELEM_TYPE_ENUMERATED) ? snd_ctl_elem_value_get_enumerated(val, 0)
+            : (t == SND_CTL_ELEM_TYPE_BOOLEAN)    ? snd_ctl_elem_value_get_boolean(val, 0)
+                                                  : snd_ctl_elem_value_get_integer(val, 0);
+    }
+    snd_ctl_close(ctl);
+    return out;
+}
+int  Device::getClockSource()    { return (int)readCtlValue(findAudientCard(), "Audient Clock Selector Clock Source"); }
+bool Device::getOpticalClockValid() { return readCtlValue(findAudientCard(), "Audient Optical1 Clock Validity") > 0; }
 
 // ---- sample rate / clock ----
 bool Device::setSampleRate(int hz) { int32_t v = hz; return ctlSet(E_SR, 0x01, 0, &v, 4); }

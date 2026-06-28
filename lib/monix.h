@@ -37,8 +37,12 @@ public:
     bool setAltTrim(float v);                    // sel 0x17
     bool setTalkbackSource(TalkbackSource s);   // sel 0x08
 
-    // Clock source via ALSA enum ("Audient Clock Selector Clock Source"): 0=Internal, 1=Dig1...
+    // Clock source via ALSA enum ("Audient Clock Selector Clock Source"):
+    // 0 = Internal, 1 = Optical (S/PDIF or ADAT input). When feeding the optical
+    // input, slave to it (index 1) or you get clock-drift crackle.
     bool setClockSource(int index);
+    int  getClockSource();           // -1 on fail
+    bool getOpticalClockValid();     // true if a valid clock is present on optical in
 
     // ---- Audible monitor volume via ALSA (snd-usb-audio "Speaker Playback Volume") ----
     // On Linux this is the DAW->output level the OS controls; the 0x36 monitor
