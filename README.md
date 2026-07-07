@@ -51,17 +51,18 @@ the module automatically on kernel updates.
 
 ```sh
 # Arch / CachyOS / Manjaro  (use headers matching your kernel: linux-cachyos-headers, …)
-sudo pacman -S --needed base-devel cmake git linux-headers alsa-lib glfw mesa dkms
+sudo pacman -S --needed base-devel cmake git linux-headers alsa-lib glfw mesa dkms \
+                       libayatana-appindicator gtk3
 
 # Debian / Ubuntu / Pop!_OS
 sudo apt install build-essential cmake git linux-headers-$(uname -r) \
                  libasound2-dev libglfw3-dev libgl1-mesa-dev dkms \
                  libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
-                 libwayland-dev
+                 libwayland-dev libayatana-appindicator3-dev libgtk-3-dev pkg-config
 
 # Fedora
 sudo dnf install gcc-c++ cmake git kernel-devel alsa-lib-devel glfw-devel \
-                 mesa-libGL-devel dkms
+                 mesa-libGL-devel dkms libayatana-appindicator-gtk3-devel gtk3-devel
 ```
 
 ## Install
@@ -78,6 +79,13 @@ monix-gui
 The bundle ships prebuilt app binaries; only the kernel module is built locally
 (it has to be — modules are tied to your running kernel). `install.sh` also works
 from a source checkout (it builds the app too if there's no prebuilt binary).
+
+The installer also installs:
+- `monix-driverctl`, a small maintenance helper used by the GUI to detect and
+  repair missing current-kernel driver builds after OS/kernel updates.
+- a desktop launcher (`Monix`) so it appears in your application menu.
+- a copy of the driver source under `/usr/share/monix/driver`, so future repairs
+  do not depend on keeping the original checkout.
 
 ### From source
 
@@ -124,6 +132,27 @@ cmake --build build -j
 
 Sanity check: `ls /dev/audient_id*` should list a node and `monixctl status` should
 print the sample rate + monitor state.
+
+### Kernel updates
+
+If a kernel update leaves the Audient USB device visible but `/dev/audient_id*`
+missing, Monix shows a "Kernel Update Detected" prompt. Choose **Rebuild Driver**
+and approve the system password prompt; Monix runs:
+
+```sh
+monix-driverctl install-current
+```
+
+You can run the same command manually. `monix-driverctl status` prints the current
+diagnostics (`kernel`, `usb`, `module`, `node`, `dkms`, `headers`, and whether a
+rebuild is needed).
+
+### Tray and autostart
+
+On desktops with AppIndicator/Ayatana support (KDE Plasma included), Monix shows a
+tray icon. The close button hides Monix to tray by default; use the tray menu's
+**Quit Monix** entry for a real exit. In **App Settings** you can enable
+start-at-login and install a per-user app launcher.
 
 ## Device support
 
@@ -191,7 +220,7 @@ want as default in your sound settings.
 
 - **No `/dev/audient_id*`** — module didn't load. Check `lsmod | grep audient` and
   `dmesg | grep audient_id`; ensure kernel headers are installed and (Arch) match
-  the running kernel.
+  the running kernel. Or run `monix-driverctl install-current`.
 - **GUI says "no device" / permission denied** — not in the `audio` group yet
   (re-login after `usermod`), or the udev rule isn't installed.
 - **S/PDIF crackling** — set Clock source to **Optical** in the System Panel so the

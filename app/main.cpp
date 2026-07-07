@@ -10,6 +10,9 @@
 #include "theme.h"
 #include "persist.h"
 #include "pwsplit.h"
+#include "appsettings.h"
+#include "tray.h"
+#include "drivercheck.h"
 
 #include <chrono>
 #include <vector>
@@ -46,20 +49,54 @@ static uint16_t detectPid() {
 // pair (node, node+1).
 struct VStrip { std::string name; int node; bool stereo; bool mic; };
 
-int main() {
+struct WindowState {
+    bool closeRequested = false;
+    bool visible = true;
+};
+
+int main(int argc, char** argv) {
+    bool startHidden = false;
+    for (int i = 1; i < argc; i++) if (std::strcmp(argv[i], "--start-hidden") == 0) startHidden = true;
+
+    AppSettings appSettings;
+    loadAppSettings(appSettings);
+    bool trayReady = appSettings.trayEnabled && monixtray::init();
+
     if (!glfwInit()) { fprintf(stderr, "glfw init failed\n"); return 1; }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    if (startHidden && trayReady) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow* win = glfwCreateWindow(1320, 800, "Monix", nullptr, nullptr);
     if (!win) { glfwTerminate(); return 1; }
+    WindowState windowState;
+    windowState.visible = !(startHidden && trayReady);
+    glfwSetWindowUserPointer(win, &windowState);
+    glfwSetWindowCloseCallback(win, [](GLFWwindow* w) {
+        if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->closeRequested = true;
+        glfwSetWindowShouldClose(w, GLFW_FALSE);
+    });
+    glfwSetWindowIconifyCallback(win, [](GLFWwindow* w, int iconified) {
+        if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->visible = !iconified;
+    });
+    glfwSetWindowFocusCallback(win, [](GLFWwindow* w, int focused) {
+        if (focused) {
+            if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->visible = true;
+        }
+    });
     glfwMakeContextCurrent(win); glfwSwapInterval(1);
     IMGUI_CHECKVERSION(); ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 130");
+    bool renderReady = true;
     monixtheme::apply();
 
     Device dev; bool connected = dev.open();
+    drivercheck::Status driverStatus = drivercheck::readStatus();
+    double lastDriverCheck = 0;
+    bool driverPopupOpened = false;
+    bool driverPromptDismissed = false;
+    bool driverRepairStarted = false;
     const DeviceInfo* info = dev.info();             // set from the connected PID
     if (!info) info = findDevice(detectPid());        // not connected: best-effort by sysfs
     if (!info) info = findDevice(0x000d);             // last resort: iD24 layout
@@ -112,7 +149,7 @@ int main() {
     int   curMix = 0;            // 0=Main,1=Cue A,2=Cue B (which mix the faders edit)
     const char* mixName[3] = {"MASTER MIX", "CUE A", "CUE B"};
     int   source = 2;           // MIC/OPT/DAW selector (display)
-    bool  showRouting = false, showDevices = false;
+    bool  showRouting = false, showDevices = false, showApp = false;
     struct OutPair { std::string name; int l, r; };
     // Routable analogue output pairs, generated from the profile's output count.
     std::vector<OutPair> outPairs;
@@ -202,8 +239,89 @@ int main() {
         return c;
     };
 
-    while (!glfwWindowShouldClose(win)) {
+    auto showWindow = [&]{
+        if (!win) {
+            glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+            win = glfwCreateWindow(1320, 800, "Monix", nullptr, nullptr);
+            if (!win) return;
+            glfwSetWindowUserPointer(win, &windowState);
+            glfwSetWindowCloseCallback(win, [](GLFWwindow* w) {
+                if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->closeRequested = true;
+                glfwSetWindowShouldClose(w, GLFW_FALSE);
+            });
+            glfwSetWindowIconifyCallback(win, [](GLFWwindow* w, int iconified) {
+                if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->visible = !iconified;
+            });
+            glfwSetWindowFocusCallback(win, [](GLFWwindow* w, int focused) {
+                if (focused) {
+                    if (auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w))) s->visible = true;
+                }
+            });
+            glfwMakeContextCurrent(win);
+            glfwSwapInterval(1);
+            ImGui_ImplGlfw_InitForOpenGL(win, true);
+            ImGui_ImplOpenGL3_Init("#version 130");
+            renderReady = true;
+        }
+        glfwShowWindow(win);
+        glfwRestoreWindow(win);
+        glfwFocusWindow(win);
+        glfwRequestWindowAttention(win);
+        windowState.visible = true;
+        monixtray::setVisibleState(true);
+    };
+    auto hideWindow = [&]{
+        if (renderReady) {
+            ImGui_ImplOpenGL3_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            renderReady = false;
+        }
+        if (win) {
+            glfwDestroyWindow(win);
+            win = nullptr;
+        }
+        windowState.visible = false;
+        monixtray::setVisibleState(false);
+    };
+    monixtray::setVisibleState(windowState.visible);
+    if (startHidden && trayReady) hideWindow();
+
+    bool running = true;
+    while (running) {
         glfwPollEvents();
+        monixtray::poll();
+        if (monixtray::takeShowRequest()) showWindow();
+        if (monixtray::takeHideRequest()) hideWindow();
+        if (monixtray::takeQuitRequest()) running = false;
+        if (windowState.closeRequested) {
+            windowState.closeRequested = false;
+            if (appSettings.trayEnabled && appSettings.closeToTray && trayReady) hideWindow();
+            else running = false;
+        }
+
+        if (!windowState.visible || !win || !renderReady) {
+            glfwWaitEventsTimeout(0.2);
+            continue;
+        }
+
+        double loopNow = now_ms();
+        if (loopNow - lastDriverCheck > 5000) {
+            lastDriverCheck = loopNow;
+            driverStatus = drivercheck::readStatus();
+            if (!driverStatus.needsRebuild) {
+                driverPopupOpened = false;
+                driverPromptDismissed = false;
+                driverRepairStarted = false;
+                if (!connected && dev.open()) {
+                    connected = true;
+                    if (dev.info()) {
+                        info = dev.info();
+                        devName = info->name;
+                    }
+                }
+            }
+        }
+
         if (connected) {
             double t = now_ms();
             if (t - lastState > 500) { lastState = t;
@@ -227,6 +345,45 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("##monix", nullptr, ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        if (driverStatus.needsRebuild && !driverPromptDismissed && !driverPopupOpened) {
+            ImGui::OpenPopup("Kernel Update Detected");
+            driverPopupOpened = true;
+        }
+        if (ImGui::BeginPopupModal("Kernel Update Detected", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("Monix can see your Audient USB device, but the audient_id helper module is not ready for kernel %s.", driverStatus.kernel.c_str());
+            if (driverStatus.reason == "kernel-update")
+                ImGui::TextWrapped("This usually happens after a kernel update. Monix can rebuild and reload the helper with DKMS.");
+            else
+                ImGui::TextWrapped("The helper driver appears to be missing. Monix can install it with DKMS.");
+            if (!driverStatus.headers)
+                ImGui::TextWrapped("Matching kernel headers are not currently detected; the repair will try to install them first.");
+            ImGui::Separator();
+            if (!driverRepairStarted) {
+                if (ImGui::Button("Rebuild Driver", ImVec2(150, 0))) {
+                    driverRepairStarted = drivercheck::startRepair(driverStatus);
+                    lastDriverCheck = 0;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Later", ImVec2(100, 0))) {
+                    driverPromptDismissed = true;
+                    driverPopupOpened = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            } else {
+                ImGui::TextWrapped("Repair started. Approve the system password prompt if it appears.");
+                std::string tail = drivercheck::repairLogTail();
+                if (!tail.empty()) ImGui::TextWrapped("%s", tail.c_str());
+                if (ImGui::Button("Check Again", ImVec2(120, 0))) lastDriverCheck = 0;
+                ImGui::SameLine();
+                if (ImGui::Button("Close", ImVec2(100, 0))) {
+                    driverPromptDismissed = true;
+                    driverPopupOpened = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
 
         float H = io.DisplaySize.y, W = io.DisplaySize.x;
         float rightW = 250, midW = 210;
@@ -311,6 +468,15 @@ int main() {
         ImGui::PopStyleColor();
         ImGui::TextDisabled("%s   %d Hz", devName, sampleRate);
         if (!connected) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f,0.4f,0.4f,1)); ImGui::TextUnformatted("no device"); ImGui::PopStyleColor(); }
+        if (driverStatus.needsRebuild) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f,0.65f,0.25f,1));
+            ImGui::TextWrapped("driver rebuild needed for %s", driverStatus.kernel.c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::Button("REBUILD DRIVER", ImVec2(-1, 26))) {
+                driverPromptDismissed = false;
+                driverPopupOpened = false;
+            }
+        }
         else if (!info->verified) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.6f,0.2f,1));
             ImGui::TextWrapped("experimental: %s is reverse-engineered but untested", devName);
             ImGui::PopStyleColor(); }
@@ -340,6 +506,7 @@ int main() {
         ImGui::Dummy(ImVec2(0,10));
         if (ImGui::Button("SYSTEM / ROUTING", ImVec2(-1, 30))) showRouting = !showRouting;
         if (ImGui::Button("VIRTUAL DEVICES", ImVec2(-1, 26))) showDevices = !showDevices;
+        if (ImGui::Button("APP SETTINGS", ImVec2(-1, 26))) showApp = !showApp;
         ImGui::EndChild();
 
         // ===== System panel: routing matrix (output pair x destination) =====
@@ -493,6 +660,47 @@ int main() {
             ImGui::End();
         }
 
+        // ===== App settings: tray and user-session startup =====
+        if (showApp) {
+            ImGui::SetNextWindowSize(ImVec2(420, 220), ImGuiCond_FirstUseEver);
+            ImGui::Begin("App Settings", &showApp);
+            bool tray = appSettings.trayEnabled;
+            if (ImGui::Checkbox("Tray icon", &tray)) {
+                appSettings.trayEnabled = tray;
+                if (appSettings.trayEnabled) trayReady = monixtray::init();
+                else {
+                    if (!windowState.visible) showWindow();
+                    monixtray::shutdown();
+                    trayReady = false;
+                }
+                saveAppSettings(appSettings);
+                monixtray::setVisibleState(windowState.visible);
+            }
+            if (!trayReady && appSettings.trayEnabled)
+                ImGui::TextWrapped("Tray support was not available in this build or desktop session.");
+
+            bool closeTray = appSettings.closeToTray;
+            if (ImGui::Checkbox("Close button hides to tray", &closeTray)) {
+                appSettings.closeToTray = closeTray;
+                saveAppSettings(appSettings);
+            }
+
+            bool autoStart = autostartEnabled();
+            if (ImGui::Checkbox("Start Monix at login", &autoStart)) {
+                setAutostart(autoStart);
+            }
+
+            static double launcherAt = 0;
+            if (ImGui::Button("Install app launcher")) {
+                if (installLauncher()) launcherAt = now_ms();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("adds Monix to the application menu");
+            if (launcherAt && now_ms() - launcherAt < 6000)
+                ImGui::TextWrapped("Launcher installed to %s", launcherPath().c_str());
+            ImGui::End();
+        }
+
         ImGui::End();
         ImGui::Render();
         int w,h; glfwGetFramebufferSize(win,&w,&h); glViewport(0,0,w,h);
@@ -504,7 +712,10 @@ int main() {
           if (t-ls>800){ saveState(c); ls=t; } }
     }
     saveState(snap());
-    ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown(); ImGui::DestroyContext();
-    glfwDestroyWindow(win); glfwTerminate();
+    monixtray::shutdown();
+    if (renderReady) { ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown(); }
+    ImGui::DestroyContext();
+    if (win) glfwDestroyWindow(win);
+    glfwTerminate();
     return 0;
 }

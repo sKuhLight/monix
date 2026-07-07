@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP=audient_id
+VERSION=${MONIX_VERSION:-0.1}
+KERNEL=${MONIX_KERNEL:-$(uname -r)}
+
+say() { printf ':: %s\n' "$*"; }
+warn() { printf 'warning=%s\n' "$*" >&2; }
+die() { printf 'error=%s\n' "$*" >&2; exit 1; }
+
+script_dir() {
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+}
+
+self_path() {
+  local d
+  d=$(script_dir)
+  printf '%s/%s\n' "$d" "$(basename "${BASH_SOURCE[0]}")"
+}
+
+source_root() {
+  local d
+  d=$(script_dir)
+  if [ -n "${MONIX_SOURCE_DIR:-}" ] && [ -d "$MONIX_SOURCE_DIR/driver" ]; then
+    printf '%s\n' "$MONIX_SOURCE_DIR"; return 0
+  fi
+  if [ -d "$d/../driver" ]; then
+    cd "$d/.." && pwd; return 0
+  fi
+  if [ -d "$d/../../driver" ]; then
+    cd "$d/../.." && pwd; return 0
+  fi
+  if [ -d /usr/share/monix/driver ]; then
+    printf '%s\n' /usr/share/monix; return 0
+  fi
+  return 1
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+audient_usb_present() {
+  if have lsusb && lsusb -d 2708: >/dev/null 2>&1; then return 0; fi
+  for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] || continue
+    [ "$(cat "$d/idVendor" 2>/dev/null)" = "2708" ] && return 0
+  done
+  return 1
+}
+
+device_node_present() {
+  compgen -G '/dev/audient_id[0-9]*' >/dev/null
+}
+
+module_for_current_kernel() {
+  modinfo -k "$KERNEL" "$APP" >/dev/null 2>&1
+}
+
+older_module_present() {
+  find /lib/modules /usr/lib/modules -path "*/extra/${APP}.ko*" -o -path "*/extramodules/${APP}.ko*" 2>/dev/null |
+    grep -vq "/${KERNEL}/"
+}
+
+dkms_has_source() {
+  dkms status -m "$APP" >/dev/null 2>&1
+}
+
+headers_present() {
+  [ -d "/lib/modules/$KERNEL/build" ] || [ -d "/usr/lib/modules/$KERNEL/build" ]
+}
+
+status() {
+  printf 'kernel=%s\n' "$KERNEL"
+  if audient_usb_present; then printf 'usb=present\n'; else printf 'usb=missing\n'; fi
+  if module_for_current_kernel; then printf 'module=current\n'; else printf 'module=missing\n'; fi
+  if device_node_present; then printf 'node=present\n'; else printf 'node=missing\n'; fi
+  if older_module_present; then printf 'older_module=yes\n'; else printf 'older_module=no\n'; fi
+  if dkms_has_source; then printf 'dkms=yes\n'; else printf 'dkms=no\n'; fi
+  if headers_present; then printf 'headers=yes\n'; else printf 'headers=no\n'; fi
+
+  if audient_usb_present && { ! module_for_current_kernel || ! device_node_present; }; then
+    if older_module_present || dkms_has_source; then
+      printf 'needs_rebuild=yes\n'
+      printf 'reason=kernel-update\n'
+    else
+      printf 'needs_rebuild=yes\n'
+      printf 'reason=driver-missing\n'
+    fi
+  else
+    printf 'needs_rebuild=no\n'
+    printf 'reason=ok\n'
+  fi
+}
+
+arch_header_pkg() {
+  local owner pkg
+  owner=$(pacman -Qqo "/usr/lib/modules/$KERNEL/kernel" 2>/dev/null | head -n1 || true)
+  pkg=${owner##*/}
+  if [ -n "$pkg" ]; then printf '%s-headers\n' "$pkg"; else printf 'linux-headers\n'; fi
+}
+
+install_deps() {
+  . /etc/os-release 2>/dev/null || true
+  case "${ID:-} ${ID_LIKE:-}" in
+    *arch*)
+      local h
+      h=$(arch_header_pkg)
+      pacman -S --needed base-devel cmake git "$h" alsa-lib glfw mesa dkms libayatana-appindicator gtk3
+      ;;
+    *debian*|*ubuntu*)
+      apt-get update
+      apt-get install -y build-essential cmake git "linux-headers-$KERNEL" libasound2-dev \
+        libglfw3-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+        libxext-dev libwayland-dev dkms libayatana-appindicator3-dev libgtk-3-dev pkg-config
+      ;;
+    *fedora*|*rhel*)
+      dnf install -y gcc-c++ cmake git "kernel-devel-$KERNEL" alsa-lib-devel glfw-devel \
+        mesa-libGL-devel dkms libayatana-appindicator-gtk3-devel gtk3-devel pkgconf-pkg-config
+      ;;
+    *)
+      warn "Unknown distro. Install build tools, matching kernel headers, dkms, ALSA/GLFW/OpenGL dev files, and optionally libayatana-appindicator."
+      ;;
+  esac
+}
+
+reexec_as_root() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  local self
+  self=$(self_path)
+  if have pkexec; then exec pkexec env MONIX_SOURCE_DIR="${MONIX_SOURCE_DIR:-}" MONIX_VERSION="$VERSION" MONIX_KERNEL="$KERNEL" "$self" "$@"; fi
+  if have sudo; then exec sudo env MONIX_SOURCE_DIR="${MONIX_SOURCE_DIR:-}" MONIX_VERSION="$VERSION" MONIX_KERNEL="$KERNEL" "$self" "$@"; fi
+  die "Need root privileges. Install pkexec or sudo."
+}
+
+install_current() {
+  reexec_as_root install-current "$@"
+
+  local with_deps=yes
+  if [ "${1:-}" = "--no-deps" ]; then with_deps=no; shift || true; fi
+
+  local root
+  root=$(source_root) || die "Cannot find Monix driver source. Reinstall Monix or run from a source checkout."
+  if [ "$with_deps" = yes ]; then install_deps; fi
+  headers_present || die "Missing kernel headers for $KERNEL."
+
+  if have dkms; then
+    say "Installing $APP $VERSION with DKMS for $KERNEL"
+    rm -rf "/usr/src/${APP}-${VERSION}"
+    cp -r "$root/driver" "/usr/src/${APP}-${VERSION}"
+    sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${VERSION}\"/" "/usr/src/${APP}-${VERSION}/dkms.conf"
+    dkms add -m "$APP" -v "$VERSION" 2>/dev/null || true
+    dkms install -m "$APP" -v "$VERSION" -k "$KERNEL" --force
+  else
+    say "DKMS not found; installing module only for $KERNEL"
+    make -C "$root/driver"
+    install -Dm644 "$root/driver/${APP}.ko" "/lib/modules/$KERNEL/extra/${APP}.ko"
+    depmod -a "$KERNEL"
+  fi
+
+  install -Dm644 "$root/driver/99-audient-id.rules" /etc/udev/rules.d/99-audient-id.rules
+  udevadm control --reload-rules || true
+  depmod -a "$KERNEL" || true
+  modprobe "$APP" || true
+  udevadm trigger --subsystem-match=usb --attr-match=idVendor=2708 2>/dev/null || true
+
+  local user=${SUDO_USER:-}
+  if [ -z "$user" ] && [ -n "${PKEXEC_UID:-}" ]; then user=$(getent passwd "$PKEXEC_UID" | cut -d: -f1); fi
+  if [ -n "$user" ] && getent group audio >/dev/null && ! id -nG "$user" | grep -qw audio; then
+    usermod -aG audio "$user" || true
+    say "Added $user to audio; they need to log out and back in once."
+  fi
+
+  say "Driver ready for $KERNEL"
+}
+
+case "${1:-status}" in
+  status) status ;;
+  install-current) shift; install_current "$@" ;;
+  install-deps) shift; reexec_as_root install-deps "$@"; install_deps ;;
+  *) die "Usage: $0 [status|install-current [--no-deps]|install-deps]" ;;
+esac
