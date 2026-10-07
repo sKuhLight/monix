@@ -72,6 +72,7 @@ Comment=Audient iD control panel
 Exec=monix-gui
 Icon=audio-card
 Terminal=false
+StartupWMClass=monix
 Categories=Audio;AudioVideo;Mixer;
 DESKTOP
   sudo install -Dm644 "$tmp" /usr/local/share/applications/monix.desktop
