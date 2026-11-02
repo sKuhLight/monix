@@ -312,6 +312,10 @@ int main(int argc, char** argv) {
                 driverPopupOpened = false;
                 driverPromptDismissed = false;
                 driverRepairStarted = false;
+                // The library closes the fd as soon as the module reports the
+                // device is gone (suspend/resume, unplug); mirror that here so
+                // the reconnect below actually runs.
+                if (connected && !dev.isOpen()) connected = false;
                 if (!connected && dev.open()) {
                     connected = true;
                     if (dev.info()) {
