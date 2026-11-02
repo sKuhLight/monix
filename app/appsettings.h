@@ -123,6 +123,7 @@ inline bool installLauncher() {
     f << "Exec=" << desktopQuote(currentExecutablePath()) << "\n";
     f << "Icon=audio-card\n";
     f << "Terminal=false\n";
+    f << "StartupWMClass=monix\n";
     f << "Categories=Audio;AudioVideo;Mixer;\n";
     return true;
 }

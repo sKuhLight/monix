@@ -43,6 +43,18 @@ static uint16_t detectPid() {
     closedir(d); return pid ? pid : 0x000d;
 }
 
+// Stable window identity: the Wayland app_id and X11 WM_CLASS are matched by
+// taskbars, docks and the Quickshell overview against the monix.desktop entry,
+// which is how they resolve our icon. Without this the class is empty → generic
+// icon. (GLFW only grew string window hints in 3.4.)
+static void setWindowIdentityHints() {
+#if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4)
+    glfwWindowHintString(GLFW_WAYLAND_APP_ID, "monix");
+    glfwWindowHintString(GLFW_X11_CLASS_NAME, "monix");
+    glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "monix");
+#endif
+}
+
 // Mixer nodes are, in device order (from RE: defaultMixMap): the analogue mics,
 // then the digital/optical inputs, then the DAW returns. Names are generated from
 // the device profile (counts). A visible strip is one mono node or a linked stereo
@@ -66,6 +78,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     if (startHidden && trayReady) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    setWindowIdentityHints();
     GLFWwindow* win = glfwCreateWindow(1320, 800, "Monix", nullptr, nullptr);
     if (!win) { glfwTerminate(); return 1; }
     WindowState windowState;
@@ -242,6 +255,7 @@ int main(int argc, char** argv) {
     auto showWindow = [&]{
         if (!win) {
             glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+            setWindowIdentityHints();
             win = glfwCreateWindow(1320, 800, "Monix", nullptr, nullptr);
             if (!win) return;
             glfwSetWindowUserPointer(win, &windowState);
