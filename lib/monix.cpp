@@ -116,7 +116,16 @@ bool Device::xfer(uint8_t rt, uint8_t req, uint16_t wValue, uint16_t wIndex,
     idctl_msg m; memset(&m, 0, sizeof m);
     m.bRequestType = rt; m.bRequest = req; m.wValue = wValue; m.wIndex = wIndex; m.wLength = len;
     if (!in && data && len) memcpy(m.data, data, len);
-    if (ioctl(fd_, IDCTL_IOC_XFER, &m) != 0) { err_ = strerror(errno); return false; }
+    if (ioctl(fd_, IDCTL_IOC_XFER, &m) != 0) {
+        int e = errno;
+        err_ = strerror(e);
+        // The module unlinks /dev/audient_idN on unplug and on every
+        // suspend/resume (misc_deregister), so the fd we hold is stale for good.
+        // Close it so isOpen() goes false and the reconnect path in app/main.cpp
+        // re-opens the freshly created node instead of polling a dead fd.
+        if (e == ENODEV || e == EBADF || e == ESHUTDOWN) close();
+        return false;
+    }
     if (in && data && len) memcpy(data, m.data, len);
     return true;
 }

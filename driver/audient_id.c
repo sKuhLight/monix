@@ -35,6 +35,7 @@
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
 #include <linux/idr.h>
+#include <linux/kref.h>
 
 #define AUDIENT_VID 0x2708
 
@@ -73,16 +74,47 @@ struct idctl_dev {
 	struct mutex         lock;   /* serialises transfers, guards udev */
 	char                 name[32];
 	int                  id;
+	struct kref          ref;    /* probe + one per open fd */
 };
 
 static DEFINE_IDA(idctl_ida);
 
+/*
+ * Runs only when the last reference is gone: the driver's own (dropped in
+ * idctl_disconnect()) plus every fd still open across a disconnect. The ida id
+ * is released in idctl_disconnect() already, so that the number a new probe
+ * gets does not depend on how long a stale fd survives.
+ */
+static void idctl_free(struct kref *ref)
+{
+	struct idctl_dev *dev = container_of(ref, struct idctl_dev, ref);
+
+	kfree(dev);
+}
+
+/*
+ * misc_open() and misc_deregister() are both serialised by the misc core's
+ * misc_mtx, and the misc core holds it across the ->open() callback. So the
+ * kref_get() below cannot race the kref_put() in idctl_disconnect(): either
+ * this open completes first and pins the device, or misc_deregister() has
+ * already removed the node and this callback is never reached for it.
+ */
 static int idctl_open(struct inode *inode, struct file *file)
 {
 	/* misc core sets file->private_data to the struct miscdevice */
 	struct idctl_dev *dev =
 		container_of(file->private_data, struct idctl_dev, misc);
+
+	kref_get(&dev->ref);
 	file->private_data = dev;
+	return 0;
+}
+
+static int idctl_release(struct inode *inode, struct file *file)
+{
+	struct idctl_dev *dev = file->private_data;
+
+	kref_put(&dev->ref, idctl_free);
 	return 0;
 }
 
@@ -119,12 +151,17 @@ static int idctl_do_xfer(struct idctl_dev *dev, struct idctl_msg *msg)
 					   msg->wValue, msg->wIndex,
 					   msg->data, msg->wLength,
 					   IDCTL_TIMEOUT_MS, GFP_KERNEL);
-	mutex_unlock(&dev->lock);
-
+	/*
+	 * Log while still holding the lock: dev->udev is only guaranteed to be
+	 * alive (and non-NULL) between the check above and this unlock, because
+	 * idctl_disconnect() clears it under the same lock.
+	 */
 	if (ret)
 		dev_dbg(&dev->udev->dev,
 			"control transfer failed: %d (type=0x%02x req=0x%02x wValue=0x%04x wIndex=0x%04x)\n",
 			ret, msg->bRequestType, msg->bRequest, msg->wValue, msg->wIndex);
+	mutex_unlock(&dev->lock);
+
 	return ret;
 }
 
@@ -177,6 +214,7 @@ static long idctl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 static const struct file_operations idctl_fops = {
 	.owner          = THIS_MODULE,
 	.open           = idctl_open,
+	.release        = idctl_release,
 	.write          = idctl_write,
 	.unlocked_ioctl = idctl_ioctl,
 	.compat_ioctl   = compat_ptr_ioctl,
@@ -194,6 +232,7 @@ static int idctl_probe(struct usb_interface *intf,
 		return -ENOMEM;
 
 	mutex_init(&dev->lock);
+	kref_init(&dev->ref);
 	dev->udev = usb_get_dev(udev);
 
 	dev->id = ida_alloc(&idctl_ida, GFP_KERNEL);
@@ -238,10 +277,20 @@ static void idctl_disconnect(struct usb_interface *intf)
 	dev->udev = NULL;
 	mutex_unlock(&dev->lock);
 
+	/*
+	 * Release the number here and not in idctl_free(), or the re-probe after a
+	 * resume would land on /dev/audient_id1 while the stale fd pins id 0.
+	 */
 	ida_free(&idctl_ida, dev->id);
 	dev_info(&intf->dev, "Audient iD control relay removed (/dev/%s)\n",
 		 dev->name);
-	kfree(dev);
+	/*
+	 * misc_deregister() only unlinks /dev/audient_idN; it does not wait for
+	 * already-open fds. Drop the driver's reference and let the last
+	 * idctl_release() free dev, so a pending ioctl never touches freed
+	 * memory (that was a GPF in osq_lock on a stale mutex).
+	 */
+	kref_put(&dev->ref, idctl_free);
 }
 
 /*
