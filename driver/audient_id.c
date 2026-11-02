@@ -81,13 +81,14 @@ static DEFINE_IDA(idctl_ida);
 
 /*
  * Runs only when the last reference is gone: the driver's own (dropped in
- * idctl_disconnect()) plus every fd still open across a disconnect.
+ * idctl_disconnect()) plus every fd still open across a disconnect. The ida id
+ * is released in idctl_disconnect() already, so that the number a new probe
+ * gets does not depend on how long a stale fd survives.
  */
 static void idctl_free(struct kref *ref)
 {
 	struct idctl_dev *dev = container_of(ref, struct idctl_dev, ref);
 
-	ida_free(&idctl_ida, dev->id);
 	kfree(dev);
 }
 
@@ -276,6 +277,11 @@ static void idctl_disconnect(struct usb_interface *intf)
 	dev->udev = NULL;
 	mutex_unlock(&dev->lock);
 
+	/*
+	 * Release the number here and not in idctl_free(), or the re-probe after a
+	 * resume would land on /dev/audient_id1 while the stale fd pins id 0.
+	 */
+	ida_free(&idctl_ida, dev->id);
 	dev_info(&intf->dev, "Audient iD control relay removed (/dev/%s)\n",
 		 dev->name);
 	/*
